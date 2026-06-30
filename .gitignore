@@ -1,0 +1,11 @@
+# Node dependencies
+node_modules/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor files
+.DS_Store
+.vscode/
