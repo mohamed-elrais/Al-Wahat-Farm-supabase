@@ -28,7 +28,7 @@ select has_function(
   array[
     'uuid', 'task_type', 'text', 'text', 'uuid', 'uuid', 'uuid',
     'date', 'time without time zone', 'integer', 'timestamp with time zone',
-    'task_priority', 'jsonb', 'boolean', 'uuid', 'uuid[]', 'uuid'
+    'task_priority', 'jsonb', 'boolean', 'uuid', 'uuid[]', 'uuid', 'jsonb'
   ],
   'create_farm_task has one op-ID-aware signature'
 );
