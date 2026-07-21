@@ -79,6 +79,19 @@ select test.set_auth('30000000-0000-0000-0000-000000000001');
 
 create temp table _d (key text primary key, id uuid) on commit drop;
 
+-- Relative dates so the suite stays valid as time passes AND satisfies
+-- the schedule date rules (start >= today, end within one month).
+create temp table _dates (key text primary key, d date) on commit drop;
+insert into _dates values
+  ('starts', current_date),
+  ('ends', current_date + 27),
+  ('friday',
+   current_date + 3 + ((5 - extract(isodow from current_date + 3)::int + 7) % 7));
+insert into _dates
+select 'saturday', d + 1 from _dates where key = 'friday';
+insert into _dates
+select 'once', d + 3 from _dates where key = 'friday';
+
 insert into _d
 select 'calcium', public.create_inventory_item(
   '31000000-0000-0000-0000-000000000001',
@@ -107,7 +120,8 @@ select throws_ok(
   $sql$
     select public.create_operation_plan(
       '31000000-0000-0000-0000-000000000001', 'fertilization',
-      'Bad category', 'daily', date '2026-08-01',
+      'Bad category', 'daily', current_date,
+      p_ends_on => current_date + 7,
       p_inventory_item_id => (select id from _d where key = 'shovel'),
       p_application_rate => 10,
       p_rate_basis => 'per_feddan',
@@ -123,7 +137,8 @@ select throws_ok(
   $sql$
     select public.create_operation_plan(
       '31000000-0000-0000-0000-000000000001', 'fertilization',
-      'Rate without product', 'daily', date '2026-08-01',
+      'Rate without product', 'daily', current_date,
+      p_ends_on => current_date + 7,
       p_application_rate => 10
     )
   $sql$,
@@ -136,7 +151,8 @@ select throws_ok(
   $sql$
     select public.create_operation_plan(
       '31000000-0000-0000-0000-000000000001', 'irrigation',
-      'Watered fertilizer', 'daily', date '2026-08-01',
+      'Watered fertilizer', 'daily', current_date,
+      p_ends_on => current_date + 7,
       p_inventory_item_id => (select id from _d where key = 'calcium'),
       p_application_rate => 10,
       p_rate_basis => 'per_feddan',
@@ -156,13 +172,11 @@ select throws_ok(
 insert into _d
 select 'plan', public.create_operation_plan(
   '31000000-0000-0000-0000-000000000001', 'fertilization',
-  'Friday calcium', 'weekly', date '2026-08-01',
+  'Friday calcium', 'weekly', (select d from _dates where key = 'starts'),
   p_status => 'active',
-  p_ends_on => date '2026-10-31',
+  p_ends_on => (select d from _dates where key = 'ends'),
   p_scheduled_start_time => time '08:00',
-  p_days_of_week => array[
-    extract(isodow from date '2026-08-07')::smallint
-  ],
+  p_days_of_week => array[5::smallint], -- Friday
   p_targets => jsonb_build_array(jsonb_build_object(
     'irrigation_zone_id', '31000000-0000-0000-0000-000000000003'
   )),
@@ -178,7 +192,8 @@ select 'plan', public.create_operation_plan(
 select is(
   (select count(*)::int
    from public.generate_operation_tasks_for_date(
-     '31000000-0000-0000-0000-000000000001', date '2026-08-07')),
+     '31000000-0000-0000-0000-000000000001',
+     (select d from _dates where key = 'friday'))),
   1,
   'a matching weekly date generates one task per target'
 );
@@ -187,7 +202,7 @@ insert into _d
 select 'task', r.generated_task_id
 from public.operation_plan_runs r
 where r.operation_plan_id = (select id from _d where key = 'plan')
-  and r.operation_date = date '2026-08-07';
+  and r.operation_date = (select d from _dates where key = 'friday');
 
 select is(
   (select (instructions ->> 'required_quantity')::numeric
@@ -215,7 +230,8 @@ select is(
 select is(
   (select count(*)::int
    from public.generate_operation_tasks_for_date(
-     '31000000-0000-0000-0000-000000000001', date '2026-08-07')),
+     '31000000-0000-0000-0000-000000000001',
+     (select d from _dates where key = 'friday'))),
   0,
   'regeneration for the same date is a no-op (dedup)'
 );
@@ -223,7 +239,8 @@ select is(
 select is(
   (select count(*)::int
    from public.generate_operation_tasks_for_date(
-     '31000000-0000-0000-0000-000000000001', date '2026-08-08')),
+     '31000000-0000-0000-0000-000000000001',
+     (select d from _dates where key = 'saturday'))),
   0,
   'non-matching weekday generates nothing'
 );
@@ -248,7 +265,8 @@ select is(
 insert into _d
 select 'bigplan', public.create_operation_plan(
   '31000000-0000-0000-0000-000000000001', 'fertilization',
-  'Huge dose', 'once', date '2026-08-10',
+  'Huge dose', 'once', (select d from _dates where key = 'once'),
+  p_ends_on => (select d from _dates where key = 'once'),
   p_status => 'active',
   p_targets => jsonb_build_array(jsonb_build_object(
     'irrigation_zone_id', '31000000-0000-0000-0000-000000000003'
@@ -262,7 +280,8 @@ select 'bigplan', public.create_operation_plan(
 select is(
   (select count(*)::int
    from public.generate_operation_tasks_for_date(
-     '31000000-0000-0000-0000-000000000001', date '2026-08-10')),
+     '31000000-0000-0000-0000-000000000001',
+     (select d from _dates where key = 'once'))),
   0,
   'insufficient stock blocks task generation'
 );
@@ -293,7 +312,8 @@ select lives_ok(
 select is(
   (select count(*)::int
    from public.generate_operation_tasks_for_date(
-     '31000000-0000-0000-0000-000000000001', date '2026-08-10')),
+     '31000000-0000-0000-0000-000000000001',
+     (select d from _dates where key = 'once'))),
   1,
   'the blocked run generates its task after restock'
 );
